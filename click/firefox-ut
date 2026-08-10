@@ -1,0 +1,140 @@
+#!/bin/sh
+#
+# Firefox launcher for Ubuntu Touch / Lomiri.
+#
+# Four device constraints shape this script:
+#
+# 1. Mir only accepts Wayland connections from processes lomiri-app-launch
+#    started, so this is only meaningful as the click's Exec= line. Run by hand
+#    it always dies with "we don't have any display".
+#
+# 2. click AppArmor confinement has no general /usr/bin/* exec rule, so running
+#    any system utility -- readlink, dirname, mkdir, date, id -- fails with
+#    "Permission denied" and kills the script with exit 126. Everything here is
+#    a shell built-in.
+#
+# 3. Because mkdir is unavailable, the profile cannot be pre-created, and
+#    --profile does *not* create a missing directory -- it fails and Gecko puts
+#    up a modal error dialog instead of a browser window. Gecko's profile
+#    manager, on the other hand, creates its whole tree including HOME. So HOME
+#    is pointed at the app's confined storage and --profile is not used.
+#
+# 4. Confinement only permits writes under <xdg-base>/<package-name>/, and
+#    lomiri-app-launch sets XDG_DATA_HOME to the *unconfined* ~/.local/share,
+#    so the XDG variables are recomputed here rather than trusted.
+#
+# Diagnostics go to stdout, which lomiri-app-launch captures:
+#   journalctl --user -n 100 --no-pager | grep firefox
+
+set -e
+
+case "$0" in
+    /*)  APP_DIR="${0%/*}" ;;
+    */*) APP_DIR="$PWD/${0%/*}" ;;
+    *)   APP_DIR="$PWD" ;;
+esac
+GECKO_DIR="$APP_DIR/gecko"
+
+# The click is installed at .../<package-name>/, and confinement keys every
+# writable path off that same name. Deriving it from the install path rather
+# than hardcoding it lets several builds (release, tree build) coexist on the
+# device, each confined to its own storage.
+APP_PKG="${APP_DIR##*/}"
+
+# Everything Gecko writes lives under here, which is the only tree confinement
+# allows. Gecko creates it on first run.
+APP_HOME="$HOME/.local/share/$APP_PKG"
+export HOME="$APP_HOME"
+export XDG_DATA_HOME="$APP_HOME/.local/share"
+export XDG_CACHE_HOME="$APP_HOME/.cache"
+export XDG_CONFIG_HOME="$APP_HOME/.config"
+
+# Run through XWayland rather than natively on Mir.
+#
+# Natively, Gecko draws all page content into a wl_subsurface
+# (widget/gtk/MozContainerWayland.cpp) and Mir logs
+# "TODO: wl_subsurface.visiblity not implemented". The result is a window that
+# is created, sized, mapped and painted, but shows up as a fully transparent
+# card in the app switcher: with client-side decorations the toplevel surface
+# carries only the shadow, and the content subsurface is never displayed.
+#
+# Under X11 there is no subsurface, and the page renders. Gecko confirms it has
+# a real X window by logging a non-zero XID.
+export MOZ_ENABLE_WAYLAND=0
+export GDK_BACKEND=x11
+export DISPLAY="${DISPLAY:-:0}"
+
+# Gecko treats "X11 display but WAYLAND_DISPLAY is set" as XWayland and takes a
+# hybrid path; unset it so this is a plain X11 session.
+unset WAYLAND_DISPLAY
+
+# On-screen keyboard. Mir advertises no text-input Wayland protocol, and the
+# device has a Maliit input context for Qt but none for GTK, so the keyboard is
+# reached through the im-maliit.so shipped in this click, which speaks Maliit's
+# D-Bus protocol directly.
+#
+# GTK_IM_MODULE must never be "wayland" here: under X11 that loads
+# im-wayland.so, which calls wl_proxy_get_version() with no Wayland display and
+# segfaults 0.16s into startup, inside gtk_im_multicontext_set_context_id.
+export GTK_IM_MODULE=maliit
+export GTK_IM_MODULE_FILE="$APP_DIR/immodules.cache"
+
+# Gecko special-cases a few desktop names for client-side decorations and
+# portals. "Lomiri" is not one of them; GNOME is the closest to what Mir does.
+export XDG_CURRENT_DESKTOP=GNOME
+
+# Touchscreen input. On X11 Gecko calls gdk_disable_multidevice() unless this is
+# set, which turns off XInput2 and with it the touchscreen -- upstream only
+# makes an automatic exception for the Steam Deck (toolkit/xre/nsAppRunner.cpp).
+# Touch arrives natively on Wayland, so this is only needed on the XWayland path
+# the port uses.
+export MOZ_USE_XINPUT2=1
+
+# No window decorations. Lomiri manages windows itself, and GTK's client-side
+# decorations add shadow margins (measured: 26px left and right, 23/29 top and
+# bottom) which made the toplevel 1132px wide on a 1080px panel and pushed the
+# right edge of the page off-screen.
+export MOZ_GTK_TITLEBAR_DECORATION=none
+
+# The content sandbox is deliberately left ENABLED. AppArmor blocks
+# unprivileged user namespaces here ("CanCreateUserNamespace()
+# unshare(CLONE_NEWPID): EPERM"), but Gecko degrades gracefully and still starts
+# its content processes. Setting MOZ_DISABLE_CONTENT_SANDBOX=1 only bought a
+# permanent "security sandbox is disabled / unsupported and less secure"
+# notification, on top of click confinement that is already applied.
+
+# The profile explicitly denies /run/user/*/dconf/user, which otherwise floods
+# the journal with one warning per setting read.
+export GSETTINGS_BACKEND=memory
+
+# $APP_DIR is on the path so that dlopen() can find im-maliit.so. GTK passes
+# the name from immodules.cache straight to dlopen rather than resolving it
+# against the cache directory, so a bare "im-maliit.so" is only found via the
+# library path -- and an absolute path there would fail click-review's
+# lint:hardcoded_paths check.
+export LD_LIBRARY_PATH="$GECKO_DIR:$APP_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# The click payload is read-only, so on-device experiments live here instead of
+# costing a rebuild, reinstall and passcode each time.
+if [ -r "$APP_HOME/ut-env.sh" ]; then
+    . "$APP_HOME/ut-env.sh"
+fi
+
+# One fixed profile, rather than letting Gecko pick via profiles.ini. That
+# keying includes the install path, which contains the click version, so every
+# upgrade would otherwise start a fresh profile and lose bookmarks, history and
+# window geometry -- and a stale lock file does the same without any version
+# change. ut-profile-init creates the directory (the launcher cannot: no mkdir
+# under confinement) and seeds the window geometry on first run.
+PROFILE_DIR="$APP_HOME/profile"
+if ! "$APP_DIR/ut-profile-init" "$PROFILE_DIR"; then
+    echo "firefox-ut: WARNING: could not prepare $PROFILE_DIR"
+fi
+
+echo "firefox-ut: APP_DIR=$APP_DIR"
+echo "firefox-ut: HOME=$HOME"
+echo "firefox-ut: PROFILE_DIR=$PROFILE_DIR"
+echo "firefox-ut: XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-<unset>}"
+echo "firefox-ut: WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-<unset>}"
+
+exec "$GECKO_DIR/firefox" --profile "$PROFILE_DIR" --no-remote "$@"

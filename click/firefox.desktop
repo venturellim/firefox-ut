@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=@TITLE@
+GenericName=Web Browser
+Comment=Browse the web with Mozilla Firefox
+Exec=firefox-ut %u
+Icon=assets/firefox.png
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+X-Lomiri-Touch=true

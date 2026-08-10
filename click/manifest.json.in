@@ -1,0 +1,15 @@
+{
+    "name": "@NAME@",
+    "title": "@TITLE@",
+    "description": "Mozilla Firefox for Ubuntu Touch (Lomiri), built for the Volla Phone Plinius.",
+    "maintainer": "@MAINTAINER@",
+    "version": "@VERSION@",
+    "framework": "ubuntu-touch-24.04-1.x",
+    "architecture": "@ARCH@",
+    "hooks": {
+        "firefox": {
+            "apparmor": "firefox.apparmor",
+            "desktop": "firefox.desktop"
+        }
+    }
+}

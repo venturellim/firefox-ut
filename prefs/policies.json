@@ -1,0 +1,10 @@
+{
+    "policies": {
+        "DisableAppUpdate": true,
+        "DisableProfileImport": true,
+        "DisableSystemAddonUpdate": true,
+        "OverrideFirstRunPage": "",
+        "OverridePostUpdatePage": "",
+        "DontCheckDefaultBrowser": true
+    }
+}
