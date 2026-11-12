@@ -1,0 +1,38 @@
+name: Build Click Package
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check repository structure
+        run: ls -la
+
+      - name: Install Clickable
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          pip3 install --break-system-packages clickable-ut
+
+      - name: Create clickable config and build
+        run: |
+          if [ ! -f clickable.yaml ]; then
+            cat << 'EOF' > clickable.yaml
+          clickable_minimum_required: '8.0.0'
+          builder: custom
+          build: echo "Nothing to compile"
+          EOF
+          fi
+          clickable build --arch arm64 --skip-review --non-interactive
+
+      - name: Upload click artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firefox-ut-arm64
+          path: "**/*.click"
