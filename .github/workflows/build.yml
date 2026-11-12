@@ -1,0 +1,35 @@
+name: Build Click Package
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install click tool
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y click
+
+      - name: Prepare and build click package
+        run: |
+          if [ -f build.sh ]; then
+            chmod +x build.sh
+            ./build.sh
+          else
+            mkdir -p build_dir
+            cp -r * build_dir/
+            rm -rf build_dir/.git build_dir/.github build_dir/build_dir
+            click build build_dir
+          fi
+
+      - name: Upload click artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firefox-ut-arm64
+          path: "**/*.click"
